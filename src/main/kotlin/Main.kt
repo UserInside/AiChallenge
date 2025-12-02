@@ -1,3 +1,4 @@
+
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -24,11 +25,12 @@ fun main() {
                     println("Завершение работы...")
                     break
                 }
+
                 else -> {
                     println("Обрабатываю запрос...")
                     try {
                         val answer = getAnswer(question)
-                        println("\nОтвет: $answer")
+                        println("\nОтвет: \n$answer")
                     } catch (e: Exception) {
                         println("Произошла ошибка: ${e.message}")
                     }
@@ -86,24 +88,31 @@ suspend fun getAnswer(query: String): String {
             setBody(
                 """
                     {
-                "model": "$MODEL",
-                "messages": [
-                    {
+                    "model": "$MODEL",
+                    "messages": [
+                        {
+                        "role": "system",
+                        "content": "Отвечай исключительно в формате JSON по следующей схеме: {\"title\":\"Название\",\"description\":\"Описание\"}"
+                        },
+                        {
                         "role": "user",
                         "content": "$query"
+                        }
+                    ],
+                    "stream": false,
+                    "max_tokens": 512,
+                    "repetition_penalty": 1
                     }
-                ],
-                "stream": false,
-                "max_tokens": 512,
-                "repetition_penalty": 1
-                }
-                """.trimIndent()
+                    """.trimIndent()
             )
         }.bodyAsText()
 
         val answer = Json.decodeFromString<ChatCompletionResponse>(answerResponse).choices?.first()?.message?.content
 
-        return answer ?: "Error: ответ не получен"
+        val parsedTitle = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").title
+        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
+
+        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
 
 
     } finally {
@@ -158,3 +167,9 @@ data class ChatCompletionResponse(
         val precachedPromptTokens: Int? = null,
     )
 }
+
+@Serializable
+data class ParsedJsonAnswer(
+    val title: String,
+    val description: String,
+)
