@@ -1,4 +1,5 @@
 
+import HttpClient.Companion.client
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -13,32 +14,34 @@ import kotlinx.serialization.json.Json
 import java.security.cert.X509Certificate
 import javax.net.ssl.X509TrustManager
 
+val history = mutableListOf<String>()
+
 fun main() {
+
+
     runBlocking {
+        println("Введите ваш запрос (или 'выход' для завершения):")
+
         while (true) {
-            println("Введите ваш вопрос (или 'выход' для завершения):")
-            val question = readlnOrNull()?.trim()
+            val userInput = readlnOrNull()?.trim() ?: ""
 
-            when {
-                question.isNullOrEmpty() -> continue
-                question.equals("выход", ignoreCase = true) -> {
-                    println("Завершение работы...")
-                    break
-                }
+            history.add("user: $userInput")
 
-                else -> {
-                    println("Обрабатываю запрос...")
-                    try {
-                        val answer = getAnswer(question)
-                        println("\nОтвет: \n$answer")
-                    } catch (e: Exception) {
-                        println("Произошла ошибка: ${e.message}")
-                    }
-                    println("-".repeat(50))
-                }
+            val llmAnswer = sendToLLM(history, userInput)
+
+            history.add("assistant: $llmAnswer")
+
+            println("-".repeat(50))
+            println(llmAnswer)
+
+            if (llmAnswer.startsWith("ЭВРИКА")) {
+                break
             }
         }
     }
+
+    client.close()
+
 }
 
 
@@ -47,25 +50,8 @@ const val API_KEY =
 
 const val MODEL = "GigaChat-2"
 
-suspend fun getAnswer(query: String): String {
-    val client = HttpClient(CIO) {
-        install(ContentNegotiation) {
-            json(Json {
-                isLenient = true
-                prettyPrint = true
-                ignoreUnknownKeys = true
-            })
-        }
-        engine {
-            https {
-                trustManager = object : X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                }
-            }
-        }
-    }
+
+suspend fun sendToLLM(history: List<String>, userInput: String): String {
 
     try {
         val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
@@ -92,11 +78,11 @@ suspend fun getAnswer(query: String): String {
                     "messages": [
                         {
                         "role": "system",
-                        "content": "Отвечай исключительно в формате JSON по следующей схеме: {\"title\":\"Название\",\"description\":\"Описание\"}"
+                        "content": "$systemPrompt"
                         },
                         {
                         "role": "user",
-                        "content": "$query"
+                        "content": "$userInput"
                         }
                     ],
                     "stream": false,
@@ -108,15 +94,17 @@ suspend fun getAnswer(query: String): String {
         }.bodyAsText()
 
         val answer = Json.decodeFromString<ChatCompletionResponse>(answerResponse).choices?.first()?.message?.content
+            ?: "ЛЛМ СЛОМАЛОСЬ"
 
-        val parsedTitle = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").title
-        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
+//        val parsedTitle = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").title
+//        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
 
-        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
+        return answer
+//        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
 
 
-    } finally {
-        client.close()
+    } catch (e: Exception) {
+        return e.toString()
     }
 }
 
@@ -173,3 +161,31 @@ data class ParsedJsonAnswer(
     val title: String,
     val description: String,
 )
+
+//Отвечай исключительно в формате JSON по следующей схеме: {\"title\":\"Название\",\"description\":\"Описание\"}
+
+class HttpClient {
+
+    companion object {
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) {
+                json(
+                    Json {
+                    isLenient = true
+                    prettyPrint = true
+                    ignoreUnknownKeys = true
+                }
+                )
+            }
+            engine {
+                https {
+                    trustManager = object : X509TrustManager {
+                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                    }
+                }
+            }
+        }
+    }
+}
