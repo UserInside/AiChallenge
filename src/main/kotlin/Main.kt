@@ -1,4 +1,3 @@
-
 import HttpClient.Companion.client
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -21,7 +20,7 @@ fun main() {
 
     runBlocking {
         println("Введите ваш запрос (или 'выход' для завершения):")
-
+        var counter = 0
         while (true) {
             val userInput = readlnOrNull()?.trim() ?: ""
 
@@ -34,6 +33,13 @@ fun main() {
             println("-".repeat(50))
             println(llmAnswer)
 
+            counter++
+
+            if (counter == 5) {
+                counter = 0
+                compressDialog()
+
+            }
             if (llmAnswer.startsWith("ЭВРИКА")) {
                 break
             }
@@ -51,7 +57,10 @@ const val API_KEY =
 const val MODEL = "GigaChat-2"
 
 
-suspend fun sendToLLM(history: List<String>, userInput: String): String {
+suspend fun sendToLLM(
+    history: List<String>,
+    userInput: String,
+): String {
 
     try {
         val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
@@ -66,7 +75,7 @@ suspend fun sendToLLM(history: List<String>, userInput: String): String {
 
         val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
 
-        val answerResponse = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
+        val response = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
             headers {
                 append(HttpHeaders.Accept, "application/json")
                 append(HttpHeaders.Authorization, "Bearer $accessToken")
@@ -93,19 +102,80 @@ suspend fun sendToLLM(history: List<String>, userInput: String): String {
             )
         }.bodyAsText()
 
-        val answer = Json.decodeFromString<ChatCompletionResponse>(answerResponse).choices?.first()?.message?.content
-            ?: "ЛЛМ СЛОМАЛОСЬ"
+        val answerResponse = Json.decodeFromString<ChatCompletionResponse>(response)
 
 //        val parsedTitle = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").title
 //        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
 
-        return answer
+        val answer = answerResponse.choices?.first()?.message?.content
+        val promptTokens = answerResponse.usage?.promptTokens
+        val completionTokens = answerResponse.usage?.completionTokens
+        val totalTokens = answerResponse.usage?.totalTokens
+
+//        return answer
+        return "Ответ: $answer \npromptTokens: $promptTokens \ncompletionTokens: $completionTokens \ntotalTokens: $totalTokens "
 //        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
 
 
     } catch (e: Exception) {
         return e.toString()
     }
+}
+
+suspend fun compressDialog() {
+    try {
+        val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
+            headers {
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
+                append(HttpHeaders.Accept, "application/json")
+                append("RqUID", "4b77b5ba-e17c-4bad-9450-e01d0c77f157")
+                append(HttpHeaders.Authorization, "Basic $API_KEY")
+            }
+            setBody("scope=GIGACHAT_API_PERS")
+        }.bodyAsText()
+
+        val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
+
+        val answerResponse = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
+            headers {
+                append(HttpHeaders.Accept, "application/json")
+                append(HttpHeaders.Authorization, "Bearer $accessToken")
+            }
+            setBody(
+                """
+                    {
+                    "model": "$MODEL",
+                    "messages": [
+                        {
+                        "role": "system",
+                        "content": "Вы - эксперт по суммаризации диалогов на русском языке. Создавайте краткие, информативные суммаризации, которые сохраняют ключевой контекст для продолжения беседы."
+                        },
+                        {
+                        "role": "user",
+                        "content": "Требуется создать суммаризацию данного диалога: ${history}"
+                        }
+                    ],
+                    "stream": false,
+                    "max_tokens": 512,
+                    "repetition_penalty": 1
+                    }
+                    """.trimIndent()
+            )
+        }.bodyAsText()
+
+        val answer = Json.decodeFromString<ChatCompletionResponse>(answerResponse).choices?.first()?.message?.content
+            ?: "ЛЛМ СЛОМАЛОСЬ"
+
+
+        history.clear()
+        history.add(answer)
+//        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
+
+
+    } catch (e: Exception) {
+
+    }
+
 }
 
 
@@ -171,10 +241,10 @@ class HttpClient {
             install(ContentNegotiation) {
                 json(
                     Json {
-                    isLenient = true
-                    prettyPrint = true
-                    ignoreUnknownKeys = true
-                }
+                        isLenient = true
+                        prettyPrint = true
+                        ignoreUnknownKeys = true
+                    }
                 )
             }
             engine {
