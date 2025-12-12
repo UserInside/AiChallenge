@@ -1,5 +1,7 @@
+
 import HttpClient.Companion.client
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -26,17 +28,18 @@ fun main() {
 
             history.add("user: $userInput")
 
-            val llmAnswer = sendToLLM(history, userInput)
+            val llmAnswer = sendToLLM(userInput)
 
-            history.add("assistant: $llmAnswer")
+//            history.add("assistant: $llmAnswer")
 
             println("-".repeat(50))
             println(llmAnswer)
 
             counter++
 
-            if (counter == 5) {
+            if (counter == 10) {
                 counter = 0
+                println("----->>>> ПОДЫТОЖИМ ДИАЛОГ ")
                 compressDialog()
 
             }
@@ -58,7 +61,6 @@ const val MODEL = "GigaChat-2"
 
 
 suspend fun sendToLLM(
-    history: List<String>,
     userInput: String,
 ): String {
 
@@ -87,7 +89,7 @@ suspend fun sendToLLM(
                     "messages": [
                         {
                         "role": "system",
-                        "content": "$systemPrompt"
+                        "content": "Вы - полезный AI ассистент GigaChat. Ведите дружелюбный и содержательный диалог на русском языке. История диалога: ${history}"
                         },
                         {
                         "role": "user",
@@ -108,6 +110,7 @@ suspend fun sendToLLM(
 //        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
 
         val answer = answerResponse.choices?.first()?.message?.content
+        history.add("$answer")
         val promptTokens = answerResponse.usage?.promptTokens
         val completionTokens = answerResponse.usage?.completionTokens
         val totalTokens = answerResponse.usage?.totalTokens
@@ -136,7 +139,7 @@ suspend fun compressDialog() {
 
         val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
 
-        val answerResponse = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
+        val answerResponse: ChatCompletionResponse = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
             headers {
                 append(HttpHeaders.Accept, "application/json")
                 append(HttpHeaders.Authorization, "Bearer $accessToken")
@@ -152,7 +155,7 @@ suspend fun compressDialog() {
                         },
                         {
                         "role": "user",
-                        "content": "Требуется создать суммаризацию данного диалога: ${history}"
+                        "content": "$summaryPrompt"
                         }
                     ],
                     "stream": false,
@@ -161,9 +164,9 @@ suspend fun compressDialog() {
                     }
                     """.trimIndent()
             )
-        }.bodyAsText()
+        }.body()
 
-        val answer = Json.decodeFromString<ChatCompletionResponse>(answerResponse).choices?.first()?.message?.content
+        val answer = answerResponse.choices?.first()?.message?.content
             ?: "ЛЛМ СЛОМАЛОСЬ"
 
 
@@ -176,6 +179,26 @@ suspend fun compressDialog() {
 
     }
 
+}
+
+val summaryPrompt = buildString {
+    appendLine("Пожалуйста, суммаризируй следующий диалог между пользователем и ассистентом:")
+    appendLine("$history")
+    appendLine("Сохрани:")
+    appendLine("1. Ключевые факты о пользователе")
+    appendLine("2. Основные темы обсуждения")
+    appendLine("3. Принятые решения и договоренности")
+    appendLine("4. Важный контекст для продолжения диалога")
+    appendLine("\\nДиалог для суммаризации:")
+//    history.forEachIndexed { index, message ->
+//        val role = when (message.role) {
+//            Message.Role.USER -> "Пользователь"
+//            Message.Role.ASSISTANT -> "Ассистент"
+//            else -> "Система"
+//        }
+//        appendLine("${index + 1}. $role: ${message.content}")
+//    }
+    appendLine("\\nСуммаризация должна быть краткой (3-5 предложений), но содержательной.")
 }
 
 
@@ -195,7 +218,8 @@ data class ChatCompletionResponse(
     val model: String? = null,
     @SerialName("object")
     val objectType: String? = null,
-    val usage: Usage? = null
+    val usage: Usage? = null,
+//    val status: String?  = null,
 ) {
     @Serializable
     data class Choice(
@@ -231,6 +255,11 @@ data class ParsedJsonAnswer(
     val title: String,
     val description: String,
 )
+
+enum class Role(name: String) {
+    USER("user"),
+    ASSISTANT("assistant"),
+}
 
 //Отвечай исключительно в формате JSON по следующей схеме: {\"title\":\"Название\",\"description\":\"Описание\"}
 
