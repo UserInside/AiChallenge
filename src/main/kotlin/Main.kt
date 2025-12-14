@@ -1,206 +1,283 @@
 
 import HttpClient.Companion.client
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.security.cert.X509Certificate
-import javax.net.ssl.X509TrustManager
+import java.util.*
+fun main() = runBlocking {
+    // Загружаем последний диалог при старте
+    var conversation = ConversationStorage.loadLastConversation() ?: Conversation()
 
-val history = mutableListOf<String>()
+    println("🤖 AI Агент с сохранением истории в JSON")
+    println("📂 Текущий диалог: ${conversation.id}")
+    println("💾 Сохранено сообщений: ${conversation.messages.size}")
+    println("Введите ваш запрос (или 'выход' для завершения):")
 
-fun main() {
+    var counter = 0
+    val compressionThreshold = 10
 
+    while (true) {
+        print("> ")
+        val userInput = readlnOrNull() ?: ""
 
-    runBlocking {
-        println("Введите ваш запрос (или 'выход' для завершения):")
-        var counter = 0
-        while (true) {
-            val userInput = readlnOrNull()?.trim() ?: ""
+        if (userInput.equals("выход", ignoreCase = true)) {
+            break
+        }
 
-            history.add("user: $userInput")
+        // Добавляем сообщение пользователя
+        conversation.messages.add(
+            Message(role = Message.Role.USER, content = userInput)
+        )
 
-            val llmAnswer = sendToLLM(userInput)
+        // Сохраняем после добавления вопроса
+        conversation.saveToFile()
 
-//            history.add("assistant: $llmAnswer")
+        // Подготавливаем ВСЮ историю для LLM
+        val messagesForLLM = prepareMessagesForLLM(conversation)
+        println("📤 Отправка ${messagesForLLM.size} сообщений в LLM...")
 
-            println("-".repeat(50))
-            println(llmAnswer)
+        // Отладочный вывод первого сообщения
+        if (messagesForLLM.isNotEmpty() && messagesForLLM[0].first == "system") {
+            println("📋 Системный промпт (первые 200 символов): ${messagesForLLM[0].second.take(200)}...")
+        }
 
-            counter++
+        // Отправляем в LLM с историей
+        val llmAnswer = sendToLLM(messagesForLLM)
 
-            if (counter == 10) {
-                counter = 0
-                println("----->>>> ПОДЫТОЖИМ ДИАЛОГ ")
-                compressDialog()
+        // Добавляем ответ ассистента
+        conversation.messages.add(
+            Message(role = Message.Role.ASSISTANT, content = llmAnswer)
+        )
 
-            }
-            if (llmAnswer.startsWith("ЭВРИКА")) {
-                break
-            }
+        // Сохраняем после получения ответа
+        conversation.saveToFile()
+
+        println("-".repeat(50))
+        println("🤖 $llmAnswer")
+        println("-".repeat(50))
+
+        counter++
+
+        if (counter == compressionThreshold) {
+            counter = 0
+            println("⚡ Компрессия диалога...")
+            compressDialog(conversation)
+            // После компрессии сохраняем обновленный диалог
+            conversation.saveToFile()
         }
     }
 
     client.close()
-
+    println("👋 Программа завершена. Диалог сохранен в: conversations/${conversation.id}.json")
 }
 
+/**
+ * Подготавливает сообщения для отправки в LLM
+ */
+private fun prepareMessagesForLLM(conversation: Conversation): List<Pair<String, String>> {
+    val result = mutableListOf<Pair<String, String>>()
+
+    // Собираем все сообщения для системного промпта
+    val systemMessages = mutableListOf<String>()
+
+    // Базовая системная инструкция
+    systemMessages.add("Вы - полезный AI ассистент GigaChat. Отвечайте на русском языке.")
+
+    // Добавляем все SUMMARY сообщения как часть системного контекста
+    conversation.messages
+        .filter { it.role == Message.Role.SUMMARY }
+        .forEach { message ->
+            systemMessages.add("Контекст из предыдущего диалога: ${message.content}")
+        }
+
+    // Объединяем все системные сообщения в одно
+    result.add("system" to systemMessages.joinToString("\n\n"))
+
+    // Затем добавляем все диалоговые сообщения (USER и ASSISTANT)
+    conversation.messages
+        .filter { it.role == Message.Role.USER || it.role == Message.Role.ASSISTANT }
+        .forEach { message ->
+            when (message.role) {
+                Message.Role.USER -> result.add("user" to message.content)
+                Message.Role.ASSISTANT -> result.add("assistant" to message.content)
+                else -> {} // Игнорируем остальные
+            }
+        }
+
+    return result
+}
+
+/**
+ * Функция компрессии диалога
+ */
+private suspend fun compressDialog(conversation: Conversation) {
+    val messagesToCompress = conversation.messages
+        .filter { it.role == Message.Role.USER || it.role == Message.Role.ASSISTANT }
+        .takeLast(10)
+
+    if (messagesToCompress.isEmpty()) return
+
+    // Создаем промпт для суммаризации
+    val summaryPrompt = buildString {
+        appendLine("Пожалуйста, суммаризируйте следующий диалог, сохраняя ключевые детали:")
+        messagesToCompress.forEach { message ->
+            val roleName = when (message.role) {
+                Message.Role.USER -> "Пользователь"
+                Message.Role.ASSISTANT -> "Ассистент"
+                else -> "Система"
+            }
+            appendLine("$roleName: ${message.content}")
+        }
+        appendLine("\nСуммаризация должна быть краткой, но сохранять контекст для продолжения диалога.")
+    }
+
+    // Вызываем LLM для суммаризации с пустой историей
+    val summary = sendToLLM(listOf("user" to summaryPrompt))
+
+    // Удаляем сжатые сообщения и добавляем суммаризацию
+    conversation.messages.removeAll(messagesToCompress)
+    conversation.messages.add(
+        Message(
+            role = Message.Role.SUMMARY,
+            content = "Сжато ${messagesToCompress.size} сообщений: $summary"
+        )
+    )
+
+    println("✅ Сжато ${messagesToCompress.size} сообщений")
+    println("📝 Суммаризация: ${summary.take(100)}...")
+}
+
+/**
+ * Ваша существующая функция sendToLLM
+ */
+private suspend fun sendToLLM(messages: List<Pair<String, String>>): String {
+    try {
+        val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
+            headers {
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
+                append(HttpHeaders.Accept, "application/json")
+                append("RqUID", UUID.randomUUID().toString()) // Генерируем новый каждый раз
+                append(HttpHeaders.Authorization, "Basic $API_KEY")
+            }
+            setBody("scope=GIGACHAT_API_PERS")
+        }.bodyAsText()
+
+        val accessToken = jsonParser.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
+
+        // Подготавливаем сообщения с историей
+        val apiMessages = prepareApiMessages(messages)
+
+        // Отладочная информация
+        println("📨 Отправка в API:")
+        apiMessages.forEachIndexed { index, msg ->
+            println("  ${index + 1}. [${msg.role}] ${msg.content.take(50)}...")
+        }
+
+        // Проверяем, что системное сообщение первое
+        if (apiMessages.isEmpty() || apiMessages.first().role != "system") {
+            println("❌ Ошибка: нет системного сообщения или оно не первое")
+            return "Ошибка: системное сообщение должно быть первым"
+        }
+
+        // Создаем JSON для запроса
+        val requestBody = jsonParser.encodeToString(
+            ChatCompletionRequest(
+                model = MODEL,
+                messages = apiMessages,
+                max_tokens = 512,
+                repetition_penalty = 1.0
+            )
+        )
+
+        val response = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
+            headers {
+                append(HttpHeaders.Accept, "application/json")
+                append(HttpHeaders.ContentType, "application/json")
+                append(HttpHeaders.XRequestId, UUID.randomUUID().toString())
+                append(HttpHeaders.Authorization, "Bearer $accessToken")
+            }
+            setBody(requestBody)
+        }.bodyAsText()
+
+        // Парсим ответ с ignoreUnknownKeys
+        val answerResponse = jsonParser.decodeFromString<ChatCompletionResponse>(response)
+
+        // Проверяем на ошибки от API
+        if (answerResponse.status != null && answerResponse.status != 200) {
+            return "Ошибка API (${answerResponse.status}): ${answerResponse.message ?: "Неизвестная ошибка"}"
+        }
+
+        val answer = answerResponse.choices?.first()?.message?.content
+        val promptTokens = answerResponse.usage?.promptTokens
+        val completionTokens = answerResponse.usage?.completionTokens
+        val totalTokens = answerResponse.usage?.totalTokens
+
+        if (totalTokens != null) {
+            println("📊 Использовано токенов: $totalTokens (prompt: $promptTokens, completion: $completionTokens)")
+        }
+
+        return answer ?: "Не удалось получить ответ"
+
+    } catch (e: Exception) {
+        return "Ошибка: ${e.message}"
+    }
+}
+
+/**
+ * Конвертирует список пар (role, content) в формат для API GigaChat
+ * ВАЖНО: системное сообщение должно быть только одно и первое
+ */
+private fun prepareApiMessages(messages: List<Pair<String, String>>): List<GigaChatMessage> {
+    val apiMessages = mutableListOf<GigaChatMessage>()
+
+    // Собираем все системные сообщения (включая SUMMARY)
+    val allSystemContent = messages
+        .filter { it.first == "system" }
+        .joinToString("\n\n") { it.second }
+
+    // Создаем одно системное сообщение со всем контентом
+    apiMessages.add(GigaChatMessage(
+        role = "system",
+        content = allSystemContent.ifBlank {
+            "Вы - полезный AI ассистент GigaChat. Отвечайте на русском языке."
+        }
+    ))
+
+    // Затем добавляем все остальные сообщения (user, assistant)
+    messages
+        .filter { it.first != "system" }
+        .forEach { (role, content) ->
+            apiMessages.add(GigaChatMessage(
+                role = role,
+                content = content
+            ))
+        }
+
+    return apiMessages
+}
+
+@Serializable
+data class ChatCompletionRequest(
+    val model: String,
+    val messages: List<GigaChatMessage>,
+    val stream: Boolean = false,
+    val max_tokens: Int = 512,
+    val repetition_penalty: Double = 1.0
+)
+
+@Serializable
+data class GigaChatMessage(
+    val role: String,
+    val content: String
+)
 
 const val API_KEY =
     "MDE5YWRiMzgtYWZjOS03MzRlLTk0MzEtYmE2YTI1N2E3ZDZkOmI2ZGZiYjYzLTFlNjUtNGU4Zi1iMzZhLTBjNjY0NDcxZmJjMg=="
 
 const val MODEL = "GigaChat-2"
-
-
-suspend fun sendToLLM(
-    userInput: String,
-): String {
-
-    try {
-        val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
-            headers {
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
-                append(HttpHeaders.Accept, "application/json")
-                append("RqUID", "4b77b5ba-e17c-4bad-9450-e01d0c77f157")
-                append(HttpHeaders.Authorization, "Basic $API_KEY")
-            }
-            setBody("scope=GIGACHAT_API_PERS")
-        }.bodyAsText()
-
-        val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
-
-        val response = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
-            headers {
-                append(HttpHeaders.Accept, "application/json")
-                append(HttpHeaders.Authorization, "Bearer $accessToken")
-            }
-            setBody(
-                """
-                    {
-                    "model": "$MODEL",
-                    "messages": [
-                        {
-                        "role": "system",
-                        "content": "Вы - полезный AI ассистент GigaChat. Ведите дружелюбный и содержательный диалог на русском языке. История диалога: ${history}"
-                        },
-                        {
-                        "role": "user",
-                        "content": "$userInput"
-                        }
-                    ],
-                    "stream": false,
-                    "max_tokens": 512,
-                    "repetition_penalty": 1
-                    }
-                    """.trimIndent()
-            )
-        }.bodyAsText()
-
-        val answerResponse = Json.decodeFromString<ChatCompletionResponse>(response)
-
-//        val parsedTitle = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").title
-//        val parsedDescription = Json.decodeFromString<ParsedJsonAnswer>(answer ?: "").description
-
-        val answer = answerResponse.choices?.first()?.message?.content
-        history.add("$answer")
-        val promptTokens = answerResponse.usage?.promptTokens
-        val completionTokens = answerResponse.usage?.completionTokens
-        val totalTokens = answerResponse.usage?.totalTokens
-
-//        return answer
-        return "Ответ: $answer \npromptTokens: $promptTokens \ncompletionTokens: $completionTokens \ntotalTokens: $totalTokens "
-//        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
-
-
-    } catch (e: Exception) {
-        return e.toString()
-    }
-}
-
-suspend fun compressDialog() {
-    try {
-        val accessTokenResponse = client.post("https://ngw.devices.sberbank.ru:9443/api/v2/oauth") {
-            headers {
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
-                append(HttpHeaders.Accept, "application/json")
-                append("RqUID", "4b77b5ba-e17c-4bad-9450-e01d0c77f157")
-                append(HttpHeaders.Authorization, "Basic $API_KEY")
-            }
-            setBody("scope=GIGACHAT_API_PERS")
-        }.bodyAsText()
-
-        val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
-
-        val answerResponse: ChatCompletionResponse = client.post("https://gigachat.devices.sberbank.ru/api/v1/chat/completions") {
-            headers {
-                append(HttpHeaders.Accept, "application/json")
-                append(HttpHeaders.Authorization, "Bearer $accessToken")
-            }
-            setBody(
-                """
-                    {
-                    "model": "$MODEL",
-                    "messages": [
-                        {
-                        "role": "system",
-                        "content": "Вы - эксперт по суммаризации диалогов на русском языке. Создавайте краткие, информативные суммаризации, которые сохраняют ключевой контекст для продолжения беседы."
-                        },
-                        {
-                        "role": "user",
-                        "content": "$summaryPrompt"
-                        }
-                    ],
-                    "stream": false,
-                    "max_tokens": 512,
-                    "repetition_penalty": 1
-                    }
-                    """.trimIndent()
-            )
-        }.body()
-
-        val answer = answerResponse.choices?.first()?.message?.content
-            ?: "ЛЛМ СЛОМАЛОСЬ"
-
-
-        history.clear()
-        history.add(answer)
-//        return "Тайтл: $parsedTitle \nОписание: $parsedDescription"
-
-
-    } catch (e: Exception) {
-
-    }
-
-}
-
-val summaryPrompt = buildString {
-    appendLine("Пожалуйста, суммаризируй следующий диалог между пользователем и ассистентом:")
-    appendLine("$history")
-    appendLine("Сохрани:")
-    appendLine("1. Ключевые факты о пользователе")
-    appendLine("2. Основные темы обсуждения")
-    appendLine("3. Принятые решения и договоренности")
-    appendLine("4. Важный контекст для продолжения диалога")
-    appendLine("\\nДиалог для суммаризации:")
-//    history.forEachIndexed { index, message ->
-//        val role = when (message.role) {
-//            Message.Role.USER -> "Пользователь"
-//            Message.Role.ASSISTANT -> "Ассистент"
-//            else -> "Система"
-//        }
-//        appendLine("${index + 1}. $role: ${message.content}")
-//    }
-    appendLine("\\nСуммаризация должна быть краткой (3-5 предложений), но содержательной.")
-}
-
 
 @Serializable
 data class TokenAnswer(
@@ -209,7 +286,6 @@ data class TokenAnswer(
     @SerialName("expires_at")
     val expiresAt: Long,
 )
-
 @Serializable
 data class ChatCompletionResponse(
     val id: String? = null,
@@ -219,7 +295,8 @@ data class ChatCompletionResponse(
     @SerialName("object")
     val objectType: String? = null,
     val usage: Usage? = null,
-//    val status: String?  = null,
+    val status: Int? = null, // Добавляем поле status
+    val message: String? = null // Добавляем поле message для ошибок
 ) {
     @Serializable
     data class Choice(
@@ -248,43 +325,4 @@ data class ChatCompletionResponse(
         @SerialName("precached_prompt_tokens")
         val precachedPromptTokens: Int? = null,
     )
-}
-
-@Serializable
-data class ParsedJsonAnswer(
-    val title: String,
-    val description: String,
-)
-
-enum class Role(name: String) {
-    USER("user"),
-    ASSISTANT("assistant"),
-}
-
-//Отвечай исключительно в формате JSON по следующей схеме: {\"title\":\"Название\",\"description\":\"Описание\"}
-
-class HttpClient {
-
-    companion object {
-        val client = HttpClient(CIO) {
-            install(ContentNegotiation) {
-                json(
-                    Json {
-                        isLenient = true
-                        prettyPrint = true
-                        ignoreUnknownKeys = true
-                    }
-                )
-            }
-            engine {
-                https {
-                    trustManager = object : X509TrustManager {
-                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                    }
-                }
-            }
-        }
-    }
 }
