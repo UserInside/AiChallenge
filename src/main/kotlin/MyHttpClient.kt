@@ -7,7 +7,7 @@ import kotlinx.serialization.json.Json
 import java.security.cert.X509Certificate
 import javax.net.ssl.X509TrustManager
 
-class HttpClient {
+class MyHttpClient {
 
     companion object {
         val client = HttpClient(CIO) {
