@@ -19,9 +19,10 @@ import java.util.*
 fun main() = runBlocking {
 
     // ===== MCP INIT =====
-    val mcpProcess = ProcessBuilder("java", "-jar", "/home/igor/IdeaProjects/ig-mcp-server/build/libs/ig-mcp-server.jar")
-        .redirectError(ProcessBuilder.Redirect.INHERIT)
-        .start()
+    val mcpProcess =
+        ProcessBuilder("java", "-jar", "/home/igor/IdeaProjects/ig-mcp-server/build/libs/ig-mcp-server.jar")
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
 
     val mcpTransport = StdioClientTransport(
         input = mcpProcess.inputStream.asInput(),
@@ -150,18 +151,33 @@ private fun prepareMessagesForLLM(
                 appendLine()
                 appendLine(
                     """
-                    Если для ответа нужен инструмент,
-                    ответьте СТРОГО в формате JSON:
+    Вы МОЖЕТЕ использовать инструменты, но ТОЛЬКО если без них невозможно корректно ответить.
 
-                    {
-                      "tool_call": {
-                        "tool": "имя_инструмента",
-                        "arguments": { ... }
-                      }
-                    }
+    Правила:
+    1. Если можно ответить, используя только свои знания — ответьте ОБЫЧНЫМ ТЕКСТОМ.
+    
+    Пример:
+    Вопрос: "Что такое борщ?"
+    Ответ: Борщ — это традиционный суп...
 
-                    Без любого другого текста.
-                    """.trimIndent()
+    В этом случае инструмент НЕ используется.
+    2. Используйте инструмент ТОЛЬКО если требуется:
+       - получить данные,
+       - выполнить вычисление,
+       - вызвать внешний сервис.
+    3. Если используется инструмент, верните СТРОГО JSON без текста до или после:
+
+    {
+      "tool_call": {
+        "tool": "<ИМЯ_ИНСТРУМЕНТА>",
+        "arguments": { ... }
+      }
+    }
+
+    Ограничения:
+    - <ИМЯ_ИНСТРУМЕНТА> должно быть ТОЧНО одним из списка выше
+    - если инструмент не нужен — НИКОГДА не возвращайте JSON
+    """.trimIndent()
                 )
             }
         )
@@ -445,12 +461,13 @@ data class ToolCall(
 
 private val toolJson = Json { ignoreUnknownKeys = true }
 
-private fun extractToolCall(text: String): ToolCall? =
-    try {
-        val start = text.indexOf('{')
-        val end = text.lastIndexOf('}') + 1
-        if (start < 0 || end <= start) null
-        toolJson.decodeFromString<ToolCallWrapper>(text.substring(start, end)).toolCall
+private fun extractToolCall(text: String): ToolCall? {
+    val trimmed = text.trim()
+    if (!trimmed.startsWith("{")) return null
+
+    return try {
+        toolJson.decodeFromString<ToolCallWrapper>(trimmed).toolCall
     } catch (_: Exception) {
         null
     }
+}
