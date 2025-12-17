@@ -1,6 +1,8 @@
 plugins {
     kotlin("jvm") version "2.2.21"
     kotlin("plugin.serialization") version "2.2.21"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
+    application
 }
 
 group = "org.example"
@@ -32,9 +34,29 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-tasks.test {
-    useJUnitPlatform()
+dependencies {
+    implementation("io.modelcontextprotocol:kotlin-sdk:0.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    implementation("com.github.ajalt.clikt:clikt:4.2.1")
 }
+
+application {
+    mainClass.set("com.example.igmcpclient.IgMcpClientKt")
+}
+
+tasks.shadowJar {
+    archiveBaseName.set("ig-mcp-client")
+    archiveClassifier.set("")
+    archiveVersion.set("")
+
+    manifest {
+        attributes(
+            "Main-Class" to "com.example.igmcpclient.IgMcpClientKt"
+        )
+    }
+}
+
+
 kotlin {
     jvmToolchain(21)
 }
