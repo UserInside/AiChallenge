@@ -7,138 +7,244 @@ import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.time.delay
+import kotlinx.coroutines.*
 import kotlinx.io.asSink
 import kotlinx.io.buffered
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import java.io.File
-import java.time.Duration
 import java.time.Instant
 import java.util.*
 
 fun main() = runBlocking {
+    println("🚀 Запуск агента...")
 
     // ===== MCP INIT =====
-    val mcpProcess =
+    println("📦 Запуск MCP серверов...")
+
+    val mcpProcessFindRecipe =
         ProcessBuilder("java", "-jar", "/home/igor/IdeaProjects/ig-mcp-server/build/libs/ig-mcp-server.jar")
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start()
 
-    val mcpTransport = StdioClientTransport(
-        input = mcpProcess.inputStream.asInput(),
-        output = mcpProcess.outputStream.asSink().buffered()
+    val mcpProcessSaveRecipe =
+        ProcessBuilder("java", "-jar", "/home/igor/IdeaProjects/storageMcpServer/build/libs/storageMcpServer.jar")
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
+
+    // Даём время серверам запуститься
+    delay(2000)
+
+    println("🔌 Подключение к MCP серверам...")
+
+    val mcpTransportFindRecipe = StdioClientTransport(
+        input = mcpProcessFindRecipe.inputStream.asInput(),
+        output = mcpProcessFindRecipe.outputStream.asSink().buffered()
     )
 
-    val mcpClient = Client(
+    val mcpTransportSaveRecipe = StdioClientTransport(
+        input = mcpProcessSaveRecipe.inputStream.asInput(),
+        output = mcpProcessSaveRecipe.outputStream.asSink().buffered()
+    )
+
+    val mcpClientFindRecipeClient = Client(
         clientInfo = Implementation(
             name = "ig-mcp-client",
             version = "1.0.0"
         )
     )
 
-    mcpClient.connect(mcpTransport)
+    val mcpClientSaveRecipeClient = Client(
+        clientInfo = Implementation(
+            name = "storage-mcp-client",
+            version = "1.0.0"
+        )
+    )
 
-    val mcpService = McpService(mcpClient)
-    val mcpTools = mcpService.listTools()
+    try {
+        mcpClientFindRecipeClient.connect(mcpTransportFindRecipe)
+        println("✅ Подключено к серверу поиска рецептов")
+    } catch (e: Exception) {
+        println("❌ Ошибка подключения к серверу поиска рецептов: ${e.message}")
+        mcpProcessFindRecipe.destroy()
+        mcpProcessSaveRecipe.destroy()
+        return@runBlocking
+    }
 
-    // 🔥 ЗАПУСК ПЛАНИРОВЩИКА
-    startRecipeScheduler(mcpService)
+    try {
+        mcpClientSaveRecipeClient.connect(mcpTransportSaveRecipe)
+        println("✅ Подключено к серверу сохранения рецептов")
+    } catch (e: Exception) {
+        println("❌ Ошибка подключения к серверу сохранения рецептов: ${e.message}")
+        mcpProcessFindRecipe.destroy()
+        mcpProcessSaveRecipe.destroy()
+        return@runBlocking
+    }
 
-    // дальше — интерактивный режим или просто keep-alive
-    delay(Long.MAX_VALUE)
+    val mcpServiceFindRecipe = McpService(mcpClientFindRecipeClient)
+    val mcpServiceSaveRecipe = McpService(mcpClientSaveRecipeClient)
 
-//    // Загружаем последний диалог при старте
-//    var conversation = ConversationStorage.loadLastConversation() ?: Conversation()
-//
-//    println("🤖 AI Агент с сохранением истории в JSON")
-//    println("📂 Текущий диалог: ${conversation.id}")
-//    println("💾 Сохранено сообщений: ${conversation.messages.size}")
-//    println("Введите ваш запрос (или 'выход' для завершения):")
-//
-//    var counter = 0
-//    val compressionThreshold = 10
-//
-//    while (true) {
-//        print("> ")
-//        val userInput = readlnOrNull() ?: ""
-//
-//        if (userInput.equals("выход", ignoreCase = true)) {
-//            break
-//        }
-//
-//        // Добавляем сообщение пользователя
-//        conversation.messages.add(
-//            Message(role = Message.Role.USER, content = userInput)
-//        )
-//
-//        // Сохраняем после добавления вопроса
-//        conversation.saveToFile()
-//
-//        // Подготавливаем ВСЮ историю для LLM
-//        val messagesForLLM = prepareMessagesForLLM(conversation, mcpTools)
-//        println("📤 Отправка ${messagesForLLM.size} сообщений в LLM...")
-//        // Отладочный вывод первого сообщения
-//        if (messagesForLLM.isNotEmpty() && messagesForLLM[0].first == "system") {
-//            println("📋 Системный промпт: ${messagesForLLM[0].second}...")
-//        }
-//
-//        // Отправляем в LLM с историей
-//        val llmAnswer = sendToLLM(messagesForLLM)
-//
-//        val toolCall = extractToolCall(llmAnswer)
-//
-//        val finalAnswer =
-//            if (toolCall != null) {
-//                println("🛠 MCP вызов: ${toolCall.tool}")
-//                val toolResult = mcpService.callTool(toolCall.tool, toolCall.arguments)
-//
-//                sendToLLM(
-//                    messagesForLLM +
-//                            listOf(
-//                                "assistant" to llmAnswer,
-//                                "user" to "Результат инструмента:\n$toolResult\n\nСформулируй финальный ответ."
-//                            )
-//                )
-//            } else {
-//                llmAnswer
-//            }
-//
-//        // Добавляем ответ ассистента
-//        conversation.messages.add(
-//            Message(role = Message.Role.ASSISTANT, content = finalAnswer)
-//        )
-//
-//        // Сохраняем после получения ответа
-//        conversation.saveToFile()
-//
-//        println("-".repeat(50))
-//        println("🤖 $finalAnswer")
-//        println("-".repeat(50))
-//
-//        counter++
-//
-//        if (counter == compressionThreshold) {
-//            counter = 0
-//            println("⚡ Компрессия диалога...")
-//            compressDialog(conversation)
-//            // После компрессии сохраняем обновленный диалог
-//            conversation.saveToFile()
-//        }
-//    }
-//    mcpClient.close()
-//    mcpProcess.destroy()
-//
-//    client.close()
-//    println("👋 Программа завершена. Диалог сохранен в: conversations/${conversation.id}.json")
+    println("✅ Все сервисы готовы!\n")
+
+    // 🔥 ЗАПУСК ИНТЕРАКТИВНОГО РЕЖИМА
+    try {
+        startInteractiveMode(mcpServiceFindRecipe, mcpServiceSaveRecipe)
+    } finally {
+        println("🧹 Завершение работы серверов...")
+        mcpClientFindRecipeClient.close()
+        mcpClientSaveRecipeClient.close()
+        mcpProcessFindRecipe.destroy()
+        mcpProcessSaveRecipe.destroy()
+        println("✅ Серверы остановлены")
+    }
+}
+
+/**
+ * Интерактивный режим работы с пользователем
+ */
+suspend fun startInteractiveMode(
+    mcpServiceFindRecipe: McpService,
+    mcpServiceSaveRecipe: McpService,
+) {
+    println("🤖 Агент запущен! Доступные команды:")
+    println("   1 - Получить случайный рецепт")
+    println("   2 - Сохранить рецепт (ручной ввод)")
+    println("   3 - Получить и сохранить рецепт")
+    println("   exit - Выход")
+    println()
+
+    while (true) {
+        print("Введите команду: ")
+        val input = readlnOrNull()?.trim() ?: continue
+
+        when (input) {
+            "1" -> {
+                handleFindRecipe(mcpServiceFindRecipe)
+            }
+            "2" -> {
+                handleSaveRecipe(mcpServiceSaveRecipe)
+            }
+            "3" -> {
+                handleFindAndSaveRecipe(mcpServiceFindRecipe, mcpServiceSaveRecipe)
+            }
+            "exit" -> {
+                println("👋 Завершение работы...")
+                break
+            }
+            else -> {
+                println("❌ Неизвестная команда. Попробуйте снова.")
+            }
+        }
+        println()
+    }
+}
+
+/**
+ * Обработка команды "Получить рецепт"
+ */
+suspend fun handleFindRecipe(mcpServiceFindRecipe: McpService) {
+    try {
+        println("🔍 Получаю случайный рецепт...")
+
+        val findRecipeResult = mcpServiceFindRecipe.callTool(
+            toolName = "get_random_meal",
+            arguments = emptyMap()
+        )
+
+        val recipeText = parseRecipe(findRecipeResult)
+
+        println("✅ Рецепт получен:")
+        println("   ID: ${recipeText.id}")
+        println("   Название: ${recipeText.name}")
+        println("   Регион: ${recipeText.area}")
+        println("   Инструкция: ${recipeText.instruction.take(200)}${if (recipeText.instruction.length > 200) "..." else ""}")
+
+    } catch (e: Exception) {
+        println("❌ Ошибка при получении рецепта: ${e.message}")
+        e.printStackTrace()
+    }
+}
+
+/**
+ * Обработка команды "Сохранить рецепт"
+ */
+suspend fun handleSaveRecipe(mcpServiceSaveRecipe: McpService) {
+    try {
+        print("Введите название рецепта: ")
+        val title = readlnOrNull()?.trim()
+        if (title.isNullOrBlank()) {
+            println("❌ Название не может быть пустым")
+            return
+        }
+
+        print("Введите содержание рецепта: ")
+        val content = readlnOrNull()?.trim()
+        if (content.isNullOrBlank()) {
+            println("❌ Содержание не может быть пустым")
+            return
+        }
+
+        println("💾 Сохраняю рецепт...")
+
+        val saveRecipeResult = mcpServiceSaveRecipe.callTool(
+            toolName = "save_recipe",
+            arguments = mapOf(
+                "title" to title,
+                "content" to content
+            )
+        )
+
+        println("✅ Рецепт сохранён!")
+        println("   Результат: $saveRecipeResult")
+
+    } catch (e: Exception) {
+        println("❌ Ошибка при сохранении рецепта: ${e.message}")
+        e.printStackTrace()
+    }
+}
+
+/**
+ * Обработка команды "Получить и сохранить рецепт"
+ */
+suspend fun handleFindAndSaveRecipe(
+    mcpServiceFindRecipe: McpService,
+    mcpServiceSaveRecipe: McpService
+) {
+    try {
+        println("🔍 Получаю случайный рецепт...")
+
+        // 1. Получаем рецепт
+        val findRecipeResult = mcpServiceFindRecipe.callTool(
+            toolName = "get_random_meal",
+            arguments = emptyMap()
+        )
+
+        val recipeText = parseRecipe(findRecipeResult)
+
+        println("✅ Рецепт получен:")
+        println("   ID: ${recipeText.id}")
+        println("   Название: ${recipeText.name}")
+        println("   Регион: ${recipeText.area}")
+
+        // 2. Сохраняем рецепт
+        println("💾 Сохраняю рецепт...")
+
+        val saveRecipeResult = mcpServiceSaveRecipe.callTool(
+            toolName = "save_recipe",
+            arguments = mapOf(
+                "title" to recipeText.name,
+                "content" to recipeText.instruction
+            )
+        )
+
+        println("✅ Рецепт сохранён!")
+        println("   Результат: $saveRecipeResult")
+
+    } catch (e: Exception) {
+        println("❌ Ошибка при получении и сохранении рецепта: ${e.message}")
+        e.printStackTrace()
+    }
 }
 
 /**
@@ -166,6 +272,20 @@ private fun prepareMessagesForLLM(
                 appendLine()
                 appendLine(
                     """
+                        You have access to multiple tools.
+
+                        If the user asks to find a recipe:
+                        - First, call the tool that retrieves the recipe.
+
+                        If the user asks to save a recipe:
+                        - Call the tool that saves content to a file.
+
+                        If both are requested:
+                        - Always retrieve the recipe first
+                        - Then pass the retrieved content to the saving tool
+                        - Do not skip steps
+                        - Do not invent recipe content
+                        
 Если вопрос касается рецептов, еды или рекомендаций блюд —
 ВЫ ОБЯЗАНЫ использовать один из инструментов.
 Ответ БЕЗ tool_call считается ошибкой.
@@ -233,46 +353,6 @@ private fun prepareMessagesForLLM(
 }
 
 /**
- * Функция компрессии диалога
- */
-private suspend fun compressDialog(conversation: Conversation) {
-    val messagesToCompress = conversation.messages
-        .filter { it.role == Message.Role.USER || it.role == Message.Role.ASSISTANT }
-        .takeLast(10)
-
-    if (messagesToCompress.isEmpty()) return
-
-    // Создаем промпт для суммаризации
-    val summaryPrompt = buildString {
-        appendLine("Пожалуйста, суммаризируйте следующий диалог, сохраняя ключевые детали:")
-        messagesToCompress.forEach { message ->
-            val roleName = when (message.role) {
-                Message.Role.USER -> "Пользователь"
-                Message.Role.ASSISTANT -> "Ассистент"
-                else -> "Система"
-            }
-            appendLine("$roleName: ${message.content}")
-        }
-        appendLine("\nСуммаризация должна быть краткой, но сохранять контекст для продолжения диалога.")
-    }
-
-    // Вызываем LLM для суммаризации с пустой историей
-    val summary = sendToLLM(listOf("user" to summaryPrompt))
-
-    // Удаляем сжатые сообщения и добавляем суммаризацию
-    conversation.messages.removeAll(messagesToCompress)
-    conversation.messages.add(
-        Message(
-            role = Message.Role.SUMMARY,
-            content = "Сжато ${messagesToCompress.size} сообщений: $summary"
-        )
-    )
-
-    println("✅ Сжато ${messagesToCompress.size} сообщений")
-    println("📝 Суммаризация: ${summary.take(100)}...")
-}
-
-/**
  * Ваша существующая функция sendToLLM
  */
 private suspend fun sendToLLM(messages: List<Pair<String, String>>): String {
@@ -281,31 +361,18 @@ private suspend fun sendToLLM(messages: List<Pair<String, String>>): String {
             headers {
                 append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
                 append(HttpHeaders.Accept, "application/json")
-                append("RqUID", UUID.randomUUID().toString()) // Генерируем новый каждый раз
+                append("RqUID", UUID.randomUUID().toString())
                 append(HttpHeaders.Authorization, "Basic $API_KEY")
             }
             setBody("scope=GIGACHAT_API_PERS")
         }.bodyAsText()
 
-        val accessToken = jsonParser.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
+        val accessToken = Json.decodeFromString<TokenAnswer>(accessTokenResponse).accessToken
 
-        // Подготавливаем сообщения с историей
         val apiMessages = prepareApiMessages(messages)
 
-//        // Отладочная информация
-//        println("📨 Отправка в API:")
-//        apiMessages.forEachIndexed { index, msg ->
-//            println("  ${index + 1}. [${msg.role}] ${msg.content.take(50)}...")
-//        }
-
-        // Проверяем, что системное сообщение первое
-        if (apiMessages.isEmpty() || apiMessages.first().role != "system") {
-            println("❌ Ошибка: нет системного сообщения или оно не первое")
-            return "Ошибка: системное сообщение должно быть первым"
-        }
-
-        // Создаем JSON для запроса
-        val requestBody = jsonParser.encodeToString(
+        val requestBody = Json.encodeToString(
+            ChatCompletionRequest.serializer(),
             ChatCompletionRequest(
                 model = MODEL,
                 messages = apiMessages,
@@ -324,10 +391,8 @@ private suspend fun sendToLLM(messages: List<Pair<String, String>>): String {
             setBody(requestBody)
         }.bodyAsText()
 
-        // Парсим ответ с ignoreUnknownKeys
-        val answerResponse = jsonParser.decodeFromString<ChatCompletionResponse>(response)
+        val answerResponse = Json.decodeFromString<ChatCompletionResponse>(response)
 
-        // Проверяем на ошибки от API
         if (answerResponse.status != null && answerResponse.status != 200) {
             return "Ошибка API (${answerResponse.status}): ${answerResponse.message ?: "Неизвестная ошибка"}"
         }
@@ -350,17 +415,14 @@ private suspend fun sendToLLM(messages: List<Pair<String, String>>): String {
 
 /**
  * Конвертирует список пар (role, content) в формат для API GigaChat
- * ВАЖНО: системное сообщение должно быть только одно и первое
  */
 private fun prepareApiMessages(messages: List<Pair<String, String>>): List<GigaChatMessage> {
     val apiMessages = mutableListOf<GigaChatMessage>()
 
-    // Собираем все системные сообщения (включая SUMMARY)
     val allSystemContent = messages
         .filter { it.first == "system" }
         .joinToString("\n\n") { it.second }
 
-    // Создаем одно системное сообщение со всем контентом
     apiMessages.add(
         GigaChatMessage(
             role = "system",
@@ -369,7 +431,6 @@ private fun prepareApiMessages(messages: List<Pair<String, String>>): List<GigaC
             }
         ))
 
-    // Затем добавляем все остальные сообщения (user, assistant)
     messages
         .filter { it.first != "system" }
         .forEach { (role, content) ->
@@ -421,8 +482,8 @@ data class ChatCompletionResponse(
     @SerialName("object")
     val objectType: String? = null,
     val usage: Usage? = null,
-    val status: Int? = null, // Добавляем поле status
-    val message: String? = null // Добавляем поле message для ошибок
+    val status: Int? = null,
+    val message: String? = null
 ) {
     @Serializable
     data class Choice(
@@ -453,16 +514,9 @@ data class ChatCompletionResponse(
     )
 }
 
-
-// ===== MCP SERVICE =====
-
 class McpService(
     private val client: Client
 ) {
-    suspend fun listTools(): List<String> =
-        client.listTools().tools.map { it.name }
-
-
     suspend fun callTool(
         toolName: String,
         arguments: Map<String, Any?>
@@ -475,165 +529,20 @@ class McpService(
     }
 }
 
-// ===== TOOL CALL PARSING =====
-
-@Serializable
-data class ToolCallWrapper(
-    @SerialName("tool_call")
-    val toolCall: ToolCall
-)
-
 @Serializable
 data class ToolCall(
     val tool: String,
     val arguments: Map<String, JsonElement> = emptyMap()
 )
 
-private val toolJson = Json { ignoreUnknownKeys = true }
-
-private fun extractToolCall(text: String): ToolCall? {
-    val trimmed = text.trim()
-    if (!trimmed.startsWith("{")) return null
-
-
-    return try {
-        toolJson.decodeFromString<ToolCallWrapper>(trimmed).toolCall
-    } catch (_: Exception) {
-        null
-    }
-}
-
-data class RecipeHistory(
-    val lastMeals: MutableList<String> = mutableListOf()
-)
-
-const val MAX_HISTORY = 5
-
-fun startRecipeScheduler(
-    mcpService: McpService
-) = CoroutineScope(Dispatchers.Default).launch {
-
-    // 1. Загружаем историю ОДИН раз при старте агента
-    val store = loadRecipes()
-
-    while (isActive) {
-        try {
-            // 2. Получаем рецепт через MCP
-            val mcpResult = mcpService.callTool(
-                toolName = "get_random_meal",
-                arguments = emptyMap()
-            )
-
-
-            // 3. Парсим ответ MCP → доменная модель
-            val recipe = parseRecipe(mcpResult)
-
-            // 4. Сохраняем в память
-            store.recipes.add(recipe)
-
-            // 5. Пишем на диск
-            saveRecipes(store)
-
-            // 6. Проверяем: есть ли 3 рецепта
-            if (store.recipes.size >= 3) {
-                val lastThree = store.recipes.takeLast(3)
-
-                // 7. Генерируем summary через LLM
-                val summary = buildSummary(lastThree)
-
-                // 8. Уведомляем пользователя
-                notifyUser(summary)
-            }
-
-        } catch (e: Exception) {
-            println("❌ Ошибка планировщика: ${e.message}")
-        }
-
-        // 9. Пауза на 1 час
-        delay(Duration.ofSeconds(5).toMillis())
-    }
-}
-
 @Serializable
 data class StoredRecipe(
     val id: String,
     val name: String,
     val area: String,
+    val instruction: String,
     val timestamp: String
 )
-
-@Serializable
-data class RecipeStore(
-    val recipes: MutableList<StoredRecipe> = mutableListOf()
-)
-
-private const val RECIPES_FILE = "recipes.json"
-
-suspend fun buildSummary(
-    recipes: List<StoredRecipe>
-): String {
-
-    val prompt = buildString {
-        appendLine("Сделай краткий обзор следующих рецептов:")
-        recipes.forEach {
-            appendLine("- ${it.name} (${it.area})")
-        }
-        appendLine("Ответ — 3–5 предложений.")
-    }
-
-    return sendToLLM(
-        listOf(
-            "system" to "Ты кулинарный ассистент.",
-            "user" to prompt
-        )
-    )
-}
-
-fun notifyUser(summary: String) {
-    println("🍽 SUMMARY ПО ПОСЛЕДНИМ РЕЦЕПТАМ:")
-    println(summary)
-}
-
-fun loadRecipes(): RecipeStore {
-    val file = File(RECIPES_FILE)
-
-    if (!file.exists()) {
-        return RecipeStore()
-    }
-
-    return try {
-        Json.decodeFromString(
-            RecipeStore.serializer(),
-            file.readText()
-        )
-    } catch (e: Exception) {
-        println("⚠️ Ошибка чтения recipes.json, создаю новый файл")
-        RecipeStore()
-    }
-}
-
-fun saveRecipes(store: RecipeStore) {
-    File(RECIPES_FILE).writeText(
-        Json.encodeToString(RecipeStore.serializer(), store)
-    )
-}
-
-@Serializable
-data class MealsResponse(
-    val meals: List<MealDto>? = null
-)
-//
-//@Serializable
-//data class MealDto(
-//    @SerialName("idMeal")
-//    val id: String,
-//    @SerialName("strMeal")
-//    val name: String,
-//    @SerialName("strArea")
-//    val area: String,
-//    @SerialName("strInstruction")
-//    val strInstruction: String
-//)
 
 fun parseRecipe(mcpResult: String): StoredRecipe {
     val json = Json {
@@ -646,10 +555,10 @@ fun parseRecipe(mcpResult: String): StoredRecipe {
         id = dto.idMeal,
         name = dto.strMeal,
         area = dto.strArea,
+        instruction = dto.strInstructions ?: "неизвестный рецепт",
         timestamp = Instant.now().toString()
     )
 }
-
 
 @Serializable
 data class MealDto(
@@ -680,7 +589,6 @@ data class MealDto(
     @SerialName("strYoutube")
     val strYoutube: String? = null,
 
-    // Ингредиенты
     @SerialName("strIngredient1") val strIngredient1: String? = null,
     @SerialName("strIngredient2") val strIngredient2: String? = null,
     @SerialName("strIngredient3") val strIngredient3: String? = null,
@@ -702,7 +610,6 @@ data class MealDto(
     @SerialName("strIngredient19") val strIngredient19: String? = null,
     @SerialName("strIngredient20") val strIngredient20: String? = null,
 
-    // Меры
     @SerialName("strMeasure1") val strMeasure1: String? = null,
     @SerialName("strMeasure2") val strMeasure2: String? = null,
     @SerialName("strMeasure3") val strMeasure3: String? = null,
