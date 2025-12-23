@@ -24,6 +24,8 @@ dependencies {
     implementation("io.ktor:ktor-server-core:${ktor_version}")
     implementation("io.ktor:ktor-server-netty:${ktor_version}")
     implementation("io.ktor:ktor-client-websockets:2.3.9")
+    implementation("org.json:json:20240303")
+
 
     implementation("io.ktor:ktor-server-content-negotiation:${ktor_version}")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
