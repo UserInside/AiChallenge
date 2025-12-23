@@ -65,31 +65,125 @@ fun getEmbedding(text: String): FloatArray {
 
     return embedding
 }
+//
+//fun main() {
+//    val inputText = File("/home/igor/Desktop/4pGK.txt").readText()
+//    val tokens = tokenize(inputText)
+//
+//    val chunks = chunkTokens(
+//        tokens = tokens,
+//        chunkSize = 100,
+//        overlap = 64,
+//    )
+//
+//    val result = JSONArray()
+//
+//    chunks.forEachIndexed { index, chunkText ->
+//        println("Embedding chunk $index")
+//        val embedding = getEmbedding(chunkText)
+//
+//        val obj = JSONObject()
+//        obj.put("id", index)
+//        obj.put("text", chunkText)
+//        obj.put("embedding", JSONArray(embedding.toList()))
+//
+//        result.put(obj)
+//    }
+//
+//    File("embeddings.json").writeText(result.toString())
+//    println("Saved embeddings.json")
+//}
 
 fun main() {
-    val inputText = File("/home/igor/Desktop/4pGK.txt").readText()
-    val tokens = tokenize(inputText)
+    print("Введите вопрос: ")
+    val question = readLine()!!
 
-    val chunks = chunkTokens(
-        tokens = tokens,
-        chunkSize = 100,
-        overlap = 64,
-    )
+    // --- БЕЗ RAG ---
+    println("→ Вопрос без RAG")
+    val answerNoRag = askLLM(question)
 
-    val result = JSONArray()
+    // --- С RAG ---
+    println("→ Embedding вопроса")
+    val queryEmbedding = getEmbedding(question)
 
-    chunks.forEachIndexed { index, chunkText ->
-        println("Embedding chunk $index")
-        val embedding = getEmbedding(chunkText)
+    println("→ Поиск в FAISS")
+    val context = searchFaiss(queryEmbedding)
 
-        val obj = JSONObject()
-        obj.put("id", index)
-        obj.put("text", chunkText)
-        obj.put("embedding", JSONArray(embedding.toList()))
+    println("→ Вопрос с RAG")
+    val ragPrompt = buildRagPrompt(question, context)
+    val answerRag = askLLM(ragPrompt)
 
-        result.put(obj)
+    println("\n====== БЕЗ RAG ======\n")
+    println(answerNoRag)
+
+    println("\n====== С RAG ======\n")
+    println(answerRag)
+}
+
+fun buildRagPrompt(question: String, context: List<String>): String {
+    return """
+        Ты отвечаешь на вопрос, используя ТОЛЬКО информацию из контекста.
+        Если ответа в контексте нет — скажи "неизвестно".
+
+        Контекст:
+        ${context.joinToString("\n\n")}
+
+        Вопрос:
+        $question
+    """.trimIndent()
+}
+
+fun searchFaiss(queryEmbedding: FloatArray): List<String> {
+    val process = ProcessBuilder(
+        "./venv/bin/python",
+        "faiss_search.py"
+    ).start()
+
+    val json = JSONArray(queryEmbedding.toList()).toString()
+
+    process.outputStream.bufferedWriter().use {
+        it.write(json)
     }
 
-    File("embeddings.json").writeText(result.toString())
-    println("Saved embeddings.json")
+    val result = process.inputStream.bufferedReader().readText()
+    return JSONArray(result).map { it.toString() }
+}
+
+fun askLLM(prompt: String): String {
+    val url = URL("http://localhost:11434/api/generate")
+    val conn = url.openConnection() as HttpURLConnection
+
+    conn.requestMethod = "POST"
+    conn.setRequestProperty("Content-Type", "application/json")
+    conn.doOutput = true
+
+    // ВАЖНО: таймауты больше не критичны
+    conn.connectTimeout = 30_000
+    conn.readTimeout = 0   // бесконечно, как у ollama cli
+
+    val payload = JSONObject()
+        .put("model", "llama3")
+        .put("prompt", prompt)
+        .put("stream", true)
+
+    conn.outputStream.use {
+        it.write(payload.toString().toByteArray())
+    }
+
+    val reader = conn.inputStream.bufferedReader()
+    val answer = StringBuilder()
+
+    while (true) {
+        val line = reader.readLine() ?: break
+        val json = JSONObject(line)
+
+        if (json.optBoolean("done", false)) {
+            break
+        }
+
+        val token = json.optString("response", "")
+        answer.append(token)
+    }
+
+    return answer.toString()
 }
