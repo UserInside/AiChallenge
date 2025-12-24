@@ -65,59 +65,51 @@ fun getEmbedding(text: String): FloatArray {
 
     return embedding
 }
-//
-//fun main() {
-//    val inputText = File("/home/igor/Desktop/4pGK.txt").readText()
-//    val tokens = tokenize(inputText)
-//
-//    val chunks = chunkTokens(
-//        tokens = tokens,
-//        chunkSize = 100,
-//        overlap = 64,
-//    )
-//
-//    val result = JSONArray()
-//
-//    chunks.forEachIndexed { index, chunkText ->
-//        println("Embedding chunk $index")
-//        val embedding = getEmbedding(chunkText)
-//
-//        val obj = JSONObject()
-//        obj.put("id", index)
-//        obj.put("text", chunkText)
-//        obj.put("embedding", JSONArray(embedding.toList()))
-//
-//        result.put(obj)
-//    }
-//
-//    File("embeddings.json").writeText(result.toString())
-//    println("Saved embeddings.json")
-//}
 
 fun main() {
     print("Введите вопрос: ")
     val question = readLine()!!
 
-    // --- БЕЗ RAG ---
-    println("→ Вопрос без RAG")
-    val answerNoRag = askLLM(question)
+//    // --- БЕЗ RAG ---
+//    println("→ Вопрос без RAG")
+//    val answerNoRag = askLLM(question)
 
     // --- С RAG ---
     println("→ Embedding вопроса")
     val queryEmbedding = getEmbedding(question)
 
     println("→ Поиск в FAISS")
-    val context = searchFaiss(queryEmbedding)
+    val rawResults = searchFaiss(queryEmbedding)
 
-    println("→ Вопрос с RAG")
-    val ragPrompt = buildRagPrompt(question, context)
-    val answerRag = askLLM(ragPrompt)
+//    val result = process.inputStream.bufferedReader().readText()
+//    println("RAW FAISS OUTPUT:\n$result")
 
-    println("\n====== БЕЗ RAG ======\n")
-    println(answerNoRag)
+//    println("→ Вопрос с RAG")
+//    val ragPrompt = buildRagPrompt(question, context)
 
-    println("\n====== С RAG ======\n")
-    println(answerRag)
+    val contextNoFilter = rawResults
+        .sortedByDescending { it.score }
+        .take(5)
+        .map { it.text }
+
+    println("→ Фильтрация / reranking")
+    val contextFiltered = filterRelevant(rawResults)
+
+    println("→ Вопрос с RAG (без фильтра)")
+    val answerRagNoFilter = askLLM(
+        buildRagPrompt(question, contextNoFilter)
+    )
+
+    println("→ Вопрос с RAG (с фильтром)")
+    val answerRagFiltered = askLLM(
+        buildRagPrompt(question, contextFiltered)
+    )
+
+    println("\n====== RAG БЕЗ ФИЛЬТРА ======\n")
+    println(answerRagNoFilter)
+
+    println("\n====== RAG С ФИЛЬТРОМ ======\n")
+    println(answerRagFiltered)
 }
 
 fun buildRagPrompt(question: String, context: List<String>): String {
@@ -133,7 +125,7 @@ fun buildRagPrompt(question: String, context: List<String>): String {
     """.trimIndent()
 }
 
-fun searchFaiss(queryEmbedding: FloatArray): List<String> {
+fun searchFaiss(queryEmbedding: FloatArray): List<SearchResult> {
     val process = ProcessBuilder(
         "./venv/bin/python",
         "faiss_search.py"
@@ -146,7 +138,15 @@ fun searchFaiss(queryEmbedding: FloatArray): List<String> {
     }
 
     val result = process.inputStream.bufferedReader().readText()
-    return JSONArray(result).map { it.toString() }
+    val arr = JSONArray(result)
+
+    return List(arr.length()) { i ->
+        val obj = arr.getJSONObject(i)
+        SearchResult(
+            text = obj.getString("text"),
+            score = obj.getDouble("score").toFloat()
+        )
+    }
 }
 
 fun askLLM(prompt: String): String {
@@ -186,4 +186,23 @@ fun askLLM(prompt: String): String {
     }
 
     return answer.toString()
+}
+
+data class SearchResult(
+    val text: String,
+    val score: Float
+)
+
+const val SIM_THRESHOLD = 0.7f
+const val MAX_CONTEXT_CHUNKS = 5
+
+fun filterRelevant(
+    results: List<SearchResult>
+): List<String> {
+
+    return results
+        .sortedByDescending { it.score }       // rerank
+        .filter { it.score >= SIM_THRESHOLD }  // threshold
+        .take(MAX_CONTEXT_CHUNKS)
+        .map { it.text }
 }
