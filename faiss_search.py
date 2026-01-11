@@ -14,22 +14,39 @@ def main():
     # Загружаем FAISS index
     index = faiss.read_index("index.faiss")
 
-    k = 5
+    # Количество ближайших соседей
+    k = 15
     distances, indices = index.search(vector, k)
 
-    # Загружаем тексты
-    with open("embeddings.json", "r") as f:
+    # Загружаем метаданные чанков
+    # Ожидаемый формат embeddings.json:
+    # [
+    #   {
+    #     "id": 0,
+    #     "text": "...",
+    #     "source": "docs/file1.md"
+    #   }
+    # ]
+    with open("embeddings.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     results = []
+
     for idx, score in zip(indices[0], distances[0]):
+        if idx < 0:
+            continue
+
+        item = data[idx]
+
         results.append({
-            "text": data[idx]["text"],
-            "score": float(score)
+            "id": item.get("id", idx),
+            "text": item["text"],
+            "score": float(score),
+            "source": item.get("source", "unknown")
         })
 
-    # ВАЖНО: stdout = ТОЛЬКО JSON
-    sys.stdout.write(json.dumps(results))
+    # stdout — ТОЛЬКО JSON
+    sys.stdout.write(json.dumps(results, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,3 @@
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -65,52 +64,52 @@ fun getEmbedding(text: String): FloatArray {
 
     return embedding
 }
-
-fun main() {
-    print("Введите вопрос: ")
-    val question = readLine()!!
-
-//    // --- БЕЗ RAG ---
-//    println("→ Вопрос без RAG")
-//    val answerNoRag = askLLM(question)
-
-    // --- С RAG ---
-    println("→ Embedding вопроса")
-    val queryEmbedding = getEmbedding(question)
-
-    println("→ Поиск в FAISS")
-    val rawResults = searchFaiss(queryEmbedding)
-
-//    val result = process.inputStream.bufferedReader().readText()
-//    println("RAW FAISS OUTPUT:\n$result")
-
-//    println("→ Вопрос с RAG")
-//    val ragPrompt = buildRagPrompt(question, context)
-
-    val contextNoFilter = rawResults
-        .sortedByDescending { it.score }
-        .take(5)
-        .map { it.text }
-
-    println("→ Фильтрация / reranking")
-    val contextFiltered = filterRelevant(rawResults)
-
-    println("→ Вопрос с RAG (без фильтра)")
-    val answerRagNoFilter = askLLM(
-        buildRagPrompt(question, contextNoFilter)
-    )
-
-    println("→ Вопрос с RAG (с фильтром)")
-    val answerRagFiltered = askLLM(
-        buildRagPrompt(question, contextFiltered)
-    )
-
-    println("\n====== RAG БЕЗ ФИЛЬТРА ======\n")
-    println(answerRagNoFilter)
-
-    println("\n====== RAG С ФИЛЬТРОМ ======\n")
-    println(answerRagFiltered)
-}
+//
+//fun main() {
+//    print("Введите вопрос: ")
+//    val question = readLine()!!
+//
+////    // --- БЕЗ RAG ---
+////    println("→ Вопрос без RAG")
+////    val answerNoRag = askLLM(question)
+//
+//    // --- С RAG ---
+//    println("→ Embedding вопроса")
+//    val queryEmbedding = getEmbedding(question)
+//
+//    println("→ Поиск в FAISS")
+//    val rawResults = searchFaiss(queryEmbedding)
+//
+////    val result = process.inputStream.bufferedReader().readText()
+////    println("RAW FAISS OUTPUT:\n$result")
+//
+////    println("→ Вопрос с RAG")
+////    val ragPrompt = buildRagPrompt(question, context)
+//
+//    val contextNoFilter = rawResults
+//        .sortedByDescending { it.score }
+//        .take(5)
+//        .map { it.text }
+//
+//    println("→ Фильтрация / reranking")
+//    val contextFiltered = filterRelevant(rawResults)
+//
+//    println("→ Вопрос с RAG (без фильтра)")
+//    val answerRagNoFilter = askLLM(
+//        buildRagPrompt(question, contextNoFilter)
+//    )
+//
+//    println("→ Вопрос с RAG (с фильтром)")
+//    val answerRagFiltered = askLLM(
+//        buildRagPrompt(question, contextFiltered)
+//    )
+//
+//    println("\n====== RAG БЕЗ ФИЛЬТРА ======\n")
+//    println(answerRagNoFilter)
+//
+//    println("\n====== RAG С ФИЛЬТРОМ ======\n")
+//    println(answerRagFiltered)
+//}
 
 fun buildRagPrompt(question: String, context: List<String>): String {
     return """
@@ -143,8 +142,10 @@ fun searchFaiss(queryEmbedding: FloatArray): List<SearchResult> {
     return List(arr.length()) { i ->
         val obj = arr.getJSONObject(i)
         SearchResult(
+            id = obj.getInt("id"),
             text = obj.getString("text"),
-            score = obj.getDouble("score").toFloat()
+            score = obj.getDouble("score").toFloat(),
+            source = obj.getString("source")
         )
     }
 }
@@ -157,43 +158,25 @@ fun askLLM(prompt: String): String {
     conn.setRequestProperty("Content-Type", "application/json")
     conn.doOutput = true
 
-    // ВАЖНО: таймауты больше не критичны
     conn.connectTimeout = 30_000
-    conn.readTimeout = 0   // бесконечно, как у ollama cli
+    conn.readTimeout = 0   // <<< ВАЖНО: БЕЗ ТАЙМАУТА
 
     val payload = JSONObject()
-        .put("model", "llama3")
+        .put("model", "llama3.1")
         .put("prompt", prompt)
-        .put("stream", true)
+        .put("stream", false)
 
     conn.outputStream.use {
         it.write(payload.toString().toByteArray())
     }
 
-    val reader = conn.inputStream.bufferedReader()
-    val answer = StringBuilder()
+    val response = conn.inputStream.bufferedReader().readText()
+    val json = JSONObject(response)
 
-    while (true) {
-        val line = reader.readLine() ?: break
-        val json = JSONObject(line)
-
-        if (json.optBoolean("done", false)) {
-            break
-        }
-
-        val token = json.optString("response", "")
-        answer.append(token)
-    }
-
-    return answer.toString()
+    return json.getString("response")
 }
 
-data class SearchResult(
-    val text: String,
-    val score: Float
-)
-
-const val SIM_THRESHOLD = 0.7f
+const val SIM_THRESHOLD = 0.75f
 const val MAX_CONTEXT_CHUNKS = 5
 
 fun filterRelevant(
@@ -201,8 +184,133 @@ fun filterRelevant(
 ): List<String> {
 
     return results
-        .sortedByDescending { it.score }       // rerank
+        .sortedBy { it.score }       // rerank
         .filter { it.score >= SIM_THRESHOLD }  // threshold
         .take(MAX_CONTEXT_CHUNKS)
         .map { it.text }
 }
+
+
+
+
+enum class Role { USER, ASSISTANT }
+
+data class ChatMessage(
+    val role: Role,
+    val content: String
+)
+
+data class SearchResult(
+    val id: Int,
+    val text: String,
+    val score: Float,
+    val source: String   // имя файла / документа
+)
+
+class ChatMemory(
+    private val maxMessages: Int = 10
+) {
+    private val messages = mutableListOf<ChatMessage>()
+
+    fun add(role: Role, content: String) {
+        messages.add(ChatMessage(role, content))
+        if (messages.size > maxMessages) {
+            messages.removeAt(0)
+        }
+    }
+
+    fun formatted(): String =
+        messages.joinToString("\n") {
+            when (it.role) {
+                Role.USER -> "Пользователь: ${it.content}"
+                Role.ASSISTANT -> "Ассистент: ${it.content}"
+            }
+        }
+}
+
+data class RagContext(
+    val chunks: List<SearchResult>
+)
+
+fun retrieveContext(question: String): RagContext {
+    val embedding = getEmbedding(question)
+    val raw = searchFaiss(embedding)
+
+    val filtered = raw
+        .sortedBy { it.score }
+        .filter { it.score >= SIM_THRESHOLD }
+        .take(MAX_CONTEXT_CHUNKS)
+
+
+    raw.forEach {
+        println("score=${it.score} text=${it.text.take(50)}")
+    }
+
+    return RagContext(filtered)
+}
+
+fun buildChatRagPrompt(
+    question: String,
+    memory: ChatMemory,
+    context: RagContext
+): String {
+
+    val contextText = context.chunks.joinToString("\n\n") { chunk ->
+        "[Источник: ${chunk.source}]\n${chunk.text}"
+    }
+
+    return """
+        Ты — ассистент. 
+        Отвечай ТОЛЬКО на основе контекста.
+        Если ответа нет — скажи "неизвестно".
+
+        === История диалога ===
+        ${memory.formatted()}
+
+        === Контекст ===
+        $contextText
+
+        === Вопрос ===
+        $question
+    """.trimIndent()
+}
+
+fun printSources(context: RagContext) {
+    println("\nИсточники:")
+    context.chunks
+        .distinctBy { it.source }
+        .forEachIndexed { i, chunk ->
+            println("[${i + 1}] ${chunk.source}")
+        }
+}
+
+
+fun main() {
+    val memory = ChatMemory()
+
+    println("RAG Chat. Для выхода введите 'exit'.")
+
+    while (true) {
+        print("\nВы: ")
+        val question = readLine() ?: break
+        if (question.lowercase() == "exit") break
+
+        memory.add(Role.USER, question)
+
+        println("→ Поиск контекста")
+        val ragContext = retrieveContext(question)
+
+        println("→ Генерация ответа")
+        val prompt = buildChatRagPrompt(question, memory, ragContext)
+        val answer = askLLM(prompt)
+
+        memory.add(Role.ASSISTANT, answer)
+
+        println("\nАссистент:\n$answer")
+
+        printSources(ragContext)
+    }
+}
+
+
+//какой срок действия товарного знака согласно п. 1 ст. 1491 ГК РФ?
