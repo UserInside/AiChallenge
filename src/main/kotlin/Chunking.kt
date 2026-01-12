@@ -1,15 +1,13 @@
+import assistant.AssistantService
+//import assistant.DevAssistant
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import kotlin.math.min
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Scanner
 
-data class Chunk(
-    val id: Int,
-    val text: String,
-    val embedding: FloatArray
-)
 
 fun tokenize(text: String): List<String> {
     return text
@@ -64,53 +62,6 @@ fun getEmbedding(text: String): FloatArray {
 
     return embedding
 }
-//
-//fun main() {
-//    print("Введите вопрос: ")
-//    val question = readLine()!!
-//
-////    // --- БЕЗ RAG ---
-////    println("→ Вопрос без RAG")
-////    val answerNoRag = askLLM(question)
-//
-//    // --- С RAG ---
-//    println("→ Embedding вопроса")
-//    val queryEmbedding = getEmbedding(question)
-//
-//    println("→ Поиск в FAISS")
-//    val rawResults = searchFaiss(queryEmbedding)
-//
-////    val result = process.inputStream.bufferedReader().readText()
-////    println("RAW FAISS OUTPUT:\n$result")
-//
-////    println("→ Вопрос с RAG")
-////    val ragPrompt = buildRagPrompt(question, context)
-//
-//    val contextNoFilter = rawResults
-//        .sortedByDescending { it.score }
-//        .take(5)
-//        .map { it.text }
-//
-//    println("→ Фильтрация / reranking")
-//    val contextFiltered = filterRelevant(rawResults)
-//
-//    println("→ Вопрос с RAG (без фильтра)")
-//    val answerRagNoFilter = askLLM(
-//        buildRagPrompt(question, contextNoFilter)
-//    )
-//
-//    println("→ Вопрос с RAG (с фильтром)")
-//    val answerRagFiltered = askLLM(
-//        buildRagPrompt(question, contextFiltered)
-//    )
-//
-//    println("\n====== RAG БЕЗ ФИЛЬТРА ======\n")
-//    println(answerRagNoFilter)
-//
-//    println("\n====== RAG С ФИЛЬТРОМ ======\n")
-//    println(answerRagFiltered)
-//}
-
 fun buildRagPrompt(question: String, context: List<String>): String {
     return """
         Ты отвечаешь на вопрос, используя ТОЛЬКО информацию из контекста.
@@ -126,7 +77,7 @@ fun buildRagPrompt(question: String, context: List<String>): String {
 
 fun searchFaiss(queryEmbedding: FloatArray): List<SearchResult> {
     val process = ProcessBuilder(
-        "./venv/bin/python",
+        "./venv/bin/python3",
         "faiss_search.py"
     ).start()
 
@@ -189,8 +140,6 @@ fun filterRelevant(
         .take(MAX_CONTEXT_CHUNKS)
         .map { it.text }
 }
-
-
 
 
 enum class Role { USER, ASSISTANT }
@@ -286,31 +235,34 @@ fun printSources(context: RagContext) {
 
 
 fun main() {
-    val memory = ChatMemory()
+    println("=== Локальный /assistant/help режим ===")
+    println("Введите '/help' или 'exit'")
 
-    println("RAG Chat. Для выхода введите 'exit'.")
+    val scanner = Scanner(System.`in`)
 
     while (true) {
-        print("\nВы: ")
-        val question = readLine() ?: break
-        if (question.lowercase() == "exit") break
+        print("\n> ")
+        val cmd = scanner.nextLine().trim()
 
-        memory.add(Role.USER, question)
+        when (cmd) {
+            "exit" -> return
+            "/help" -> {
+                print("Введите вопрос: ")
+                val question = scanner.nextLine()
 
-        println("→ Поиск контекста")
-        val ragContext = retrieveContext(question)
+                val results = AssistantService.ask(question)
 
-        println("→ Генерация ответа")
-        val prompt = buildChatRagPrompt(question, memory, ragContext)
-        val answer = askLLM(prompt)
-
-        memory.add(Role.ASSISTANT, answer)
-
-        println("\nАссистент:\n$answer")
-
-        printSources(ragContext)
+                println("\n=== Ответ ассистента ===")
+                if (results.isEmpty()) {
+                    println("Ничего не найдено в коде проекта.")
+                } else {
+                    results.forEachIndexed { i, r ->
+                        println("\n--- ${i + 1}. ${r.file} ---")
+                        println(r.snippet)
+                    }
+                }
+            }
+            else -> println("Неизвестная команда")
+        }
     }
 }
-
-
-//какой срок действия товарного знака согласно п. 1 ст. 1491 ГК РФ?

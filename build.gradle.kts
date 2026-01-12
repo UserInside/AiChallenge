@@ -40,6 +40,12 @@ dependencies {
     implementation("io.modelcontextprotocol:kotlin-sdk:0.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
     implementation("com.github.ajalt.clikt:clikt:4.2.1")
+
+    // Kotlin расширения Jackson
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.15.2")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.15.2")
+
+    implementation("org.jetbrains.kotlin:kotlin-reflect:1.9.0")
 }
 
 application {
