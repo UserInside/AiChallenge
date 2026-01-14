@@ -1,0 +1,4 @@
+package assistant
+
+class TestCI {
+}
