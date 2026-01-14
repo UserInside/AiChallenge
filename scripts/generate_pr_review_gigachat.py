@@ -4,6 +4,7 @@ import uuid
 import requests
 import json
 import urllib3
+import base64
 
 # Отключаем предупреждения SSL (только временно)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -16,11 +17,15 @@ MODEL = "gigachat-test"  # замените на нужную модель
 PR_DATA_FILE = "pr_data/rag_context.json"
 
 def get_gigachat_token(client_id, client_secret):
+    # Формируем корректный Basic Auth
+    credentials = f"{client_id}:{client_secret}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {API_KEY}"
+        "Authorization": f"Basic {encoded_credentials}"
     }
     data = "scope=GIGACHAT_API_PERS"
 
