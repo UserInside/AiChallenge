@@ -26,7 +26,8 @@ def get_gigachat_token(client_id, client_secret):
             "Content-Type": "application/x-www-form-urlencoded",
             "RqUID": "ci-pr-review"
         },
-        data={"scope": "GIGACHAT_API_PERS"}
+        data={"scope": "GIGACHAT_API_PERS"},
+        verify=False  # Отключаем проверку SSL (только для CI)
     )
     r.raise_for_status()
     return r.json()["access_token"]
@@ -43,7 +44,10 @@ def call_gigachat(token, messages):
     r = requests.post(url, headers={
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
-    }, json=payload)
+        },
+        json=payload,
+        verify=False  # Отключаем проверку SSL (только для CI)
+    )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
