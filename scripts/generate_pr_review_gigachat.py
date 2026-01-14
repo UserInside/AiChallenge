@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
 import os
-import uuid
-import requests
 import json
 import urllib3
+import requests
+import uuid
 import base64
 
-# Отключаем предупреждения SSL (только временно)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-GIGACHAT_CLIENT_ID = os.environ.get("GIGACHAT_CLIENT_ID")
-GIGACHAT_CLIENT_SECRET = os.environ.get("GIGACHAT_CLIENT_SECRET")
-API_KEY = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
-
-MODEL = "gigachat-test"  # замените на нужную модель
-PR_DATA_FILE = "pr_data/rag_context.json"
-
 def get_gigachat_token(client_id, client_secret):
-    # Формируем корректный Basic Auth
     credentials = f"{client_id}:{client_secret}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
@@ -35,8 +24,17 @@ def get_gigachat_token(client_id, client_secret):
         data=data,
         verify=False  # временно отключаем SSL
     )
+
+    print("Status code:", r.status_code)
+    print("Response body:", r.text)  # <-- важная строка для отладки
+
     r.raise_for_status()
     token_response = r.json()
+
+    # Проверяем наличие ключа
+    if "accessToken" not in token_response:
+        raise ValueError(f"Не удалось получить accessToken. Ответ сервера: {token_response}")
+
     return token_response["accessToken"]
 
 def generate_pr_review(token, messages):
