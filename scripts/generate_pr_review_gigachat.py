@@ -15,6 +15,7 @@ GIGACHAT_CLIENT_ID = os.environ["GIGACHAT_CLIENT_ID"]
 GIGACHAT_CLIENT_SECRET = os.environ["GIGACHAT_CLIENT_SECRET"]
 
 def get_gigachat_token(client_id, client_secret):
+
     credentials = f"{client_id}:{client_secret}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
@@ -30,7 +31,7 @@ def get_gigachat_token(client_id, client_secret):
         "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
         headers=headers,
         data=data,
-        verify=False  # временно отключаем SSL
+        verify=False
     )
 
     print("Status code:", r.status_code)
@@ -39,11 +40,11 @@ def get_gigachat_token(client_id, client_secret):
     r.raise_for_status()
     token_response = r.json()
 
-    if "accessToken" not in token_response:
-        raise ValueError(f"Не удалось получить accessToken. Ответ сервера: {token_response}")
+    # исправлено: ключ access_token
+    if "access_token" not in token_response:
+        raise ValueError(f"Не удалось получить access_token. Ответ сервера: {token_response}")
 
-    return token_response["accessToken"]
-
+    return token_response["access_token"]
 
 def generate_pr_review(token, messages):
     headers = {
