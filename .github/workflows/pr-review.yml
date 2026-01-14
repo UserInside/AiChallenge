@@ -55,7 +55,12 @@ jobs:
 
           done < pr_data/files.txt
 
-      - name: Debug downloaded files
+      - name: Build RAG context
         run: |
-          echo "=== pr_data structure ==="
-          ls -R pr_data
+          python3 scripts/build_rag_context.py
+
+
+      - name: Debug RAG context
+        run: |
+          ls -lh pr_data
+          head -n 40 pr_data/rag_context.json
