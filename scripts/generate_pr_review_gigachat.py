@@ -1,103 +1,86 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
-import json
+import uuid
 import requests
+import json
+import urllib3
 
-# ==== Настройки ====
-# GitHub Actions передаст их через Secrets
+# Отключаем предупреждения SSL (только временно)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 GIGACHAT_CLIENT_ID = os.environ.get("GIGACHAT_CLIENT_ID")
 GIGACHAT_CLIENT_SECRET = os.environ.get("GIGACHAT_CLIENT_SECRET")
+API_KEY = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
 
-# Путь к локальному RAG контексту
-RAG_CONTEXT_FILE = "pr_data/rag_context.json"
-
-# ==== Функции ====
+MODEL = "gigachat-test"  # замените на нужную модель
+PR_DATA_FILE = "pr_data/rag_context.json"
 
 def get_gigachat_token(client_id, client_secret):
-    """Получение access token для GigaChat"""
-    import base64
-    auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {API_KEY}"
+    }
+    data = "scope=GIGACHAT_API_PERS"
+
     r = requests.post(
         "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
-        headers={
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "RqUID": "ci-pr-review"
-        },
-        data={"scope": "GIGACHAT_API_PERS"},
-        verify=False  # Отключаем проверку SSL (только для CI)
+        headers=headers,
+        data=data,
+        verify=False  # временно отключаем SSL
     )
     r.raise_for_status()
-    return r.json()["access_token"]
+    token_response = r.json()
+    return token_response["accessToken"]
 
-
-def call_gigachat(token, messages):
-    """Вызов GigaChat Chat API"""
-    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-    payload = {
-        "model": "GigaChat",
-        "messages": messages,
-        "temperature": 0.2
+def generate_pr_review(token, messages):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Request-Id": str(uuid.uuid4()),
+        "Authorization": f"Bearer {token}"
     }
-    r = requests.post(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-        },
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": role, "content": content} for role, content in messages],
+        "max_tokens": 512,
+        "repetition_penalty": 1.0
+    }
+
+    r = requests.post(
+        "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+        headers=headers,
         json=payload,
-        verify=False  # Отключаем проверку SSL (только для CI)
+        verify=False  # временно отключаем SSL
     )
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    response = r.json()
 
+    if response.get("status") and response["status"] != 200:
+        return f"Ошибка API ({response['status']}): {response.get('message', 'Неизвестная ошибка')}"
 
-def load_rag_context(path):
-    """Загрузка локального RAG контекста"""
-    if not os.path.exists(path):
-        print(f"[WARN] RAG context file not found: {path}")
-        return ""
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
+    choices = response.get("choices")
+    if choices and len(choices) > 0:
+        return choices[0]["message"]["content"]
+    return "Не удалось получить ответ"
 
 def main():
     print("=== Генерация PR-ревью через GigaChat ===")
-
-    # Загружаем контекст
-    rag_context = load_rag_context(RAG_CONTEXT_FILE)
-
-    # Подготовка системного промпта
-    SYSTEM_PROMPT = """
-Ты — ассистент для ревью PR.
-Используй только предоставленный контекст (код, документация, diff).
-Если ответа нет — говори "Не удалось найти ответ".
-Составь ревью коротко, с конкретными замечаниями.
-"""
-
-    # Ввод user prompt из GitHub Actions
-    user_prompt = f"Сделай ревью PR, используя контекст:\n{rag_context}"
-
-    # Получаем токен
     token = get_gigachat_token(GIGACHAT_CLIENT_ID, GIGACHAT_CLIENT_SECRET)
 
-    # Вызываем GigaChat
+    # Загружаем локальные данные RAG
+    with open(PR_DATA_FILE, "r", encoding="utf-8") as f:
+        context = json.load(f)
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt}
+        ("system", "Ты — ассистент. Отвечай строго на основе контекста."),
+        ("user", f"Проанализируй PR и дай текст ревью с замечаниями:\n{json.dumps(context, ensure_ascii=False)}")
     ]
 
-    review = call_gigachat(token, messages)
-    print("\n=== PR Review ===\n")
-    print(review)
-    print("\n=== Конец ревью ===\n")
-
-    # Сохраняем результат
-    os.makedirs("pr_data", exist_ok=True)
-    with open("pr_data/pr_review.txt", "w", encoding="utf-8") as f:
-        f.write(review)
-    print("[INFO] Ревью сохранено в pr_data/pr_review.txt")
-
+    answer = generate_pr_review(token, messages)
+    print("\n=== Ответ ассистента ===")
+    print(answer)
 
 if __name__ == "__main__":
     main()
