@@ -2,10 +2,7 @@ name: PR Review Assistant
 
 on:
   pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
+    types: [opened, synchronize, reopened]
 
 jobs:
   pr-review:
@@ -17,14 +14,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Print PR info
+      - name: Fetch PR files via GitHub API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          echo "PR number: ${{ github.event.pull_request.number }}"
-          echo "PR title: ${{ github.event.pull_request.title }}"
-          echo "Base branch: ${{ github.base_ref }}"
-          echo "Head branch: ${{ github.head_ref }}"
+          mkdir -p pr_data
 
-      - name: Show changed files
+          curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
+            > pr_data/pr_files_raw.json
+
+          echo "Saved pr_files_raw.json"
+          
+      - name: Fetch full content of changed files
         run: |
-          git fetch origin ${{ github.base_ref }}
-          git diff --name-only origin/${{ github.base_ref }}...HEAD
+          jq -r '.[].filename' pr_data/pr_files_raw.json > pr_data/files.txt
+        
+          mkdir -p pr_data/files
+       
+          while read file; do
+            echo "Fetching $file"
+           curl -s \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.pull_request.head.sha }}/$file" \
+              -o "pr_data/files/$(basename $file)" || true
+         done < pr_data/files.txt
