@@ -21,6 +21,8 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -e
+
           mkdir -p pr_data
 
           curl -s \
@@ -30,17 +32,30 @@ jobs:
             > pr_data/pr_files_raw.json
 
           echo "Saved pr_files_raw.json"
-          
+
       - name: Fetch full content of changed files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -e
+
           jq -r '.[].filename' pr_data/pr_files_raw.json > pr_data/files.txt
-        
+
           mkdir -p pr_data/files
-       
-          while read file; do
+
+          while read -r file; do
             echo "Fetching $file"
-           curl -s \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.pull_request.head.sha }}/$file" \
-              -o "pr_data/files/$(basename $file)" || true
-         done < pr_data/files.txt
+
+            curl -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://raw.githubusercontent.com/$REPO/$SHA/$file" \
+              -o "pr_data/files/$(basename "$file")" || true
+
+          done < pr_data/files.txt
+
+      - name: Debug downloaded files
+        run: |
+          echo "=== pr_data structure ==="
+          ls -R pr_data
