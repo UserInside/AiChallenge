@@ -6,12 +6,6 @@ import requests
 import uuid
 import base64
 import warnings
-#!/usr/bin/env python3
-import os
-import json
-import uuid
-import requests
-import warnings
 
 # Отключаем предупреждения SSL (временное решение для CI с самоподписанными сертификатами)
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -33,17 +27,23 @@ MODEL = "GigaChat-2"
 
 def get_gigachat_token(client_id: str, client_secret: str) -> str:
     """
-    Получение access_token для GigaChat API.
+    Получение access_token для GigaChat API через Basic Auth.
     """
     data = {
         "scope": "GIGACHAT_API_PERS"
     }
+
+    # Basic Auth: base64(client_id:client_secret)
+    credentials = f"{client_id}:{client_secret}"
+    encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {client_secret}"  # в старом коде использовался client_secret
+        "Authorization": f"Basic {encoded_credentials}"
     }
+
     r = requests.post(TOKEN_URL, data=data, headers=headers, verify=False)
     print("Status code:", r.status_code)
     print("Response body:", r.text)
@@ -52,11 +52,11 @@ def get_gigachat_token(client_id: str, client_secret: str) -> str:
         raise ValueError(f"Не удалось получить токен. HTTP {r.status_code}: {r.text}")
 
     token_response = r.json()
-    # В GigaChat токен приходит как access_token
     if "access_token" not in token_response:
         raise ValueError(f"Не удалось получить access_token. Ответ сервера: {token_response}")
 
     return token_response["access_token"]
+
 def generate_pr_review(token, messages):
     headers = {
         "Content-Type": "application/json",
