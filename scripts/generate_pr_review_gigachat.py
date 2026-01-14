@@ -5,7 +5,7 @@ import urllib3
 import requests
 import uuid
 import base64
-
+import warnings
 
 # Отключаем предупреждения по SSL (только для теста!)
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
