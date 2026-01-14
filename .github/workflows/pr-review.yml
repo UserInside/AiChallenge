@@ -59,8 +59,10 @@ jobs:
         run: |
           python3 scripts/build_rag_context.py
 
-
-      - name: Debug RAG context
+      - name: Generate PR review with GigaChat
+        env:
+          GIGACHAT_CLIENT_ID: ${{ secrets.GIGACHAT_CLIENT_ID }}
+          GIGACHAT_CLIENT_SECRET: ${{ secrets.GIGACHAT_CLIENT_SECRET }}
         run: |
-          ls -lh pr_data
-          head -n 40 pr_data/rag_context.json
+          python3 scripts/generate_pr_review_gigachat.py
+
