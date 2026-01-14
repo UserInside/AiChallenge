@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 GIGACHAT_CLIENT_ID = os.environ.get("GIGACHAT_CLIENT_ID")
 GIGACHAT_CLIENT_SECRET = os.environ.get("GIGACHAT_CLIENT_SECRET")
-API_KEY = f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}"
+API_KEY = os.environ.get("GIGACHAT_API_KEY")
 
 MODEL = "gigachat-test"  # замените на нужную модель
 PR_DATA_FILE = "pr_data/rag_context.json"
