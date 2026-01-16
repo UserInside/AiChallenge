@@ -1,0 +1,20 @@
+version: '3.8'
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.3.1
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+
+  rag-backend:
+    build:
+      context: ./python_backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+
