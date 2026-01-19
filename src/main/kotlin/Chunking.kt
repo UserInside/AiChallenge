@@ -198,40 +198,6 @@ fun retrieveContext(question: String): RagContext {
     return RagContext(filtered)
 }
 
-fun buildChatRagPrompt(
-    question: String,
-    memory: ChatMemory,
-    context: RagContext
-): String {
-
-    val contextText = context.chunks.joinToString("\n\n") { chunk ->
-        "[Источник: ${chunk.source}]\n${chunk.text}"
-    }
-
-    return """
-        Ты — ассистент. 
-        Отвечай ТОЛЬКО на основе контекста.
-        Если ответа нет — скажи "неизвестно".
-
-        === История диалога ===
-        ${memory.formatted()}
-
-        === Контекст ===
-        $contextText
-
-        === Вопрос ===
-        $question
-    """.trimIndent()
-}
-
-fun printSources(context: RagContext) {
-    println("\nИсточники:")
-    context.chunks
-        .distinctBy { it.source }
-        .forEachIndexed { i, chunk ->
-            println("[${i + 1}] ${chunk.source}")
-        }
-}
 
 
 fun main() {
